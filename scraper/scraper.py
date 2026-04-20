@@ -356,34 +356,30 @@ def run_cycle() -> None:
 
     new_prospects = []
     for record in records:
-        # Extraire le SIREN
-        immat = record.get("numeroImmatriculation")
-        siren = ""
-        if isinstance(immat, dict):
-            siren = immat.get("numeroIdentification", "")
-        elif isinstance(immat, str):
-            siren = immat
+        # Normaliser d'abord — le SIRET/ID est extrait par normalize_bodacc
+        company = normalize_bodacc(record)
+        unique_id = company.get("siret") or record.get("id", "")
 
-        siret = siren + "00001" if siren and len(siren) == 9 else siren
-        if not siret or siret in seen:
+        if not unique_id or unique_id in seen:
             continue
 
-        # Enrichir avec annuaire-entreprises
-        enrichment = {}
-        if siren:
+        nom = company.get("nom_entreprise", "")
+        log.info(f"  → {unique_id} | {nom[:50]}")
+
+        # Enrichissement optionnel via annuaire-entreprises
+        siren = company.get("siren", "")
+        if siren and len(siren) == 9:
             try:
                 enrichment = enrich_entreprise(siren)
+                if enrichment:
+                    company = normalize_bodacc(record, enrichment)
                 time.sleep(0.2)
             except Exception:
                 pass
 
-        company = normalize_bodacc(record, enrichment)
-        nom = company.get("nom_entreprise", "")
-        log.info(f"  → {siret} | {nom[:50]}")
-
         ai_data = generate_ai_insight(company)
         new_prospects.append(transform(company, ai_data))
-        seen.add(siret)
+        seen.add(unique_id)
         time.sleep(0.1)
 
     if new_prospects:
