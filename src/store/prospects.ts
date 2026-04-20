@@ -22,7 +22,7 @@ interface ProspectsStore {
 }
 
 export const useProspectsStore = create<ProspectsStore>((set, get) => ({
-  prospects: MOCK_PROSPECTS,
+  prospects: [],
   selectedProspect: null,
   isLoading: false,
   isScraping: false,
