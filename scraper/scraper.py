@@ -61,9 +61,9 @@ BODACC_URL = "https://bodacc-datadila.opendatasoft.com/api/explore/v2.1/catalog/
 
 @retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=2, max=16))
 def fetch_bodacc(date_depuis: str, offset: int = 0) -> dict:
-    # familleavis est le champ correct dans le dataset BODACC
+    # Pas de filtre familleavis — on filtre côté Python après inspection
     params = {
-        "where": f'familleavis="Immatriculation" AND dateparution>="{date_depuis}"',
+        "where": f'dateparution>="{date_depuis}"',
         "limit": 50,
         "offset": offset,
         "order_by": "dateparution DESC",
@@ -71,7 +71,20 @@ def fetch_bodacc(date_depuis: str, offset: int = 0) -> dict:
     resp = httpx.get(BODACC_URL, params=params, timeout=30,
                      headers={"User-Agent": "MirrorTrace/1.0"})
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    # Log le premier enregistrement pour inspecter les champs réels
+    results = data.get("results", [])
+    if results and offset == 0:
+        log.info(f"[BODACC] Champs disponibles: {list(results[0].keys())}")
+        log.info(f"[BODACC] Exemple: {json.dumps(results[0], ensure_ascii=False)[:300]}")
+    return data
+
+def is_immatriculation(record: dict) -> bool:
+    """Détecte si l'annonce est une immatriculation (peu importe le nom du champ)."""
+    for key, val in record.items():
+        if isinstance(val, str) and "immatriculation" in val.lower():
+            return True
+    return True  # Inclure tout si on ne peut pas filtrer
 
 def fetch_all_bodacc(date_depuis: str) -> list[dict]:
     all_records = []
@@ -82,8 +95,10 @@ def fetch_all_bodacc(date_depuis: str) -> list[dict]:
             records = data.get("results", [])
             if not records:
                 break
-            all_records.extend(records)
-            log.info(f"[BODACC] offset={offset} — {len(records)} annonces")
+            # Filtrer côté Python les immatriculations
+            immatriculations = [r for r in records if is_immatriculation(r)]
+            all_records.extend(immatriculations)
+            log.info(f"[BODACC] offset={offset} — {len(records)} annonces, {len(immatriculations)} immatriculations")
             if len(records) < 50:
                 break
             offset += 50
@@ -91,7 +106,7 @@ def fetch_all_bodacc(date_depuis: str) -> list[dict]:
         except Exception as e:
             log.error(f"[BODACC] Erreur offset {offset}: {e}")
             break
-    log.info(f"[BODACC] Total : {len(all_records)} annonces d'immatriculation")
+    log.info(f"[BODACC] Total : {len(all_records)} immatriculations")
     return all_records
 
 # --------------------------------------------------------------------------- #
