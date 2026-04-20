@@ -61,8 +61,9 @@ BODACC_URL = "https://bodacc-datadila.opendatasoft.com/api/explore/v2.1/catalog/
 
 @retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=2, max=16))
 def fetch_bodacc(date_depuis: str, offset: int = 0) -> dict:
+    # familleavis est le champ correct dans le dataset BODACC
     params = {
-        "where": f'typeavis="Immatriculation" AND dateparution>="{date_depuis}"',
+        "where": f'familleavis="Immatriculation" AND dateparution>="{date_depuis}"',
         "limit": 50,
         "offset": offset,
         "order_by": "dateparution DESC",
@@ -297,7 +298,7 @@ def run_cycle() -> None:
     date_depuis = (
         datetime.fromisoformat(last_run).strftime("%Y-%m-%d")
         if last_run
-        else (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        else (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")  # 7 jours au premier lancement
     )
     log.info(f"Immatriculations depuis : {date_depuis}")
 
