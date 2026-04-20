@@ -42,9 +42,14 @@ export const useProspectsStore = create<ProspectsStore>((set, get) => ({
     })),
 
   addProspects: (newProspects) =>
-    set((state) => ({
-      prospects: [...newProspects, ...state.prospects],
-    })),
+    set((state) => {
+      const existingSirets = new Set(state.prospects.map((p) => p.siret));
+      const fresh = newProspects.filter(
+        (p) => p.siret && p.companyName && !existingSirets.has(p.siret)
+      );
+      if (fresh.length === 0) return state;
+      return { prospects: [...fresh, ...state.prospects] };
+    }),
 
   markInvoiceGenerated: (id) =>
     set((state) => ({
