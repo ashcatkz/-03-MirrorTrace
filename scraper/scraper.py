@@ -80,11 +80,8 @@ def fetch_bodacc(date_depuis: str, offset: int = 0) -> dict:
     return data
 
 def is_immatriculation(record: dict) -> bool:
-    """Détecte si l'annonce est une immatriculation (peu importe le nom du champ)."""
-    for key, val in record.items():
-        if isinstance(val, str) and "immatriculation" in val.lower():
-            return True
-    return True  # Inclure tout si on ne peut pas filtrer
+    famille = record.get("familleavis_lib", "") or record.get("familleavis", "")
+    return "mmatriculat" in famille.lower() or "reation" in famille.lower()
 
 def fetch_all_bodacc(date_depuis: str) -> list[dict]:
     all_records = []
@@ -143,63 +140,87 @@ NAF_LABELS = {
     "7112B": "Ingénierie et études techniques",
 }
 
+def _get_nested(record: dict, *keys: str) -> str:
+    """Cherche une valeur dans des champs imbriqués ou plats (casse flexible)."""
+    for key in keys:
+        val = record.get(key) or record.get(key.lower()) or record.get(key.upper())
+        if val and isinstance(val, str):
+            return val
+        if val and isinstance(val, dict):
+            # Essaye d'extraire du dict
+            for sub in ["denominationSociale", "denomination", "nom", "raisonSociale"]:
+                sv = val.get(sub, "")
+                if sv:
+                    return sv
+    return ""
+
 def normalize_bodacc(record: dict, enrichment: dict = {}) -> dict:
-    # Données BODACC
-    registre = record.get("registre", "")
-    siren = record.get("numeroImmatriculation", {}).get("numeroIdentification", "") if isinstance(record.get("numeroImmatriculation"), dict) else ""
+    # SIREN — chercher dans plusieurs champs possibles
+    siren = ""
+    for field in ["numeroImmatriculation", "registre", "siren", "numerosiren"]:
+        v = record.get(field)
+        if isinstance(v, dict):
+            siren = v.get("numeroIdentification", "") or v.get("siren", "")
+        elif isinstance(v, str) and v.isdigit() and len(v) in (9, 14):
+            siren = v[:9]
+        if siren:
+            break
 
-    # Personnemorale ou personnePhysique
-    personne_morale = record.get("personnePhysique", {}) or {}
-    personne_physique = record.get("personnePhysique", {}) or {}
-    denomination = (
-        record.get("personneMorale", {}) or {}
-    ).get("denominationSociale", "")
-
+    # Nom de l'entreprise
+    denomination = ""
+    for field in ["personneMorale", "personnemorale"]:
+        pm = record.get(field)
+        if isinstance(pm, dict):
+            denomination = pm.get("denominationSociale", "") or pm.get("denomination", "")
+            break
     if not denomination:
-        pm = record.get("personneMorale") or {}
-        denomination = pm.get("denominationSociale", "") or pm.get("denomination", "")
-
-    if not denomination:
-        pp = record.get("personnePhysique") or {}
-        prenom = pp.get("prenom", "")
-        nom = pp.get("nom", "")
-        denomination = f"{prenom} {nom}".strip() or "Entreprise inconnue"
+        pp = record.get("personnePhysique") or record.get("personnephysique") or {}
+        if isinstance(pp, dict):
+            denomination = f"{pp.get('prenom', '')} {pp.get('nom', '')}".strip()
 
     # Adresse
-    adresse = record.get("adresse", {}) or {}
-    ville = adresse.get("ville", "") or adresse.get("commune", "")
-    cp = adresse.get("codePostal", "")
-    rue = f"{adresse.get('numeroVoie', '')} {adresse.get('typeVoie', '')} {adresse.get('nomVoie', '')}".strip()
+    adresse = record.get("adresse") or {}
+    if isinstance(adresse, dict):
+        ville = adresse.get("ville") or adresse.get("commune") or adresse.get("localite", "")
+        cp = adresse.get("codePostal", "")
+        rue = f"{adresse.get('numeroVoie', '')} {adresse.get('typeVoie', '')} {adresse.get('nomVoie', '')}".strip()
+    else:
+        ville, cp, rue = "", "", ""
 
-    # Enrichissement depuis annuaire-entreprises
-    naf = ""
-    naf_label = ""
-    dirigeant = "Dirigeant non communiqué"
+    # Département comme fallback de ville
+    if not ville:
+        dept = record.get("numerodepartement", "")
+        ville = f"Département {dept}" if dept else ""
 
+    # Enrichissement annuaire-entreprises
+    naf, naf_label, dirigeant = "", "", "Dirigeant non communiqué"
     if enrichment:
         matching = enrichment.get("matching_etablissements", [{}])
         etab = matching[0] if matching else {}
         naf = etab.get("activite_principale", "").replace(".", "")
         naf_label = NAF_LABELS.get(naf, etab.get("libelle_activite_principale", ""))
-        dirigeants = enrichment.get("dirigeants", [])
-        if dirigeants:
-            d = dirigeants[0]
+        dirs = enrichment.get("dirigeants", [])
+        if dirs:
+            d = dirs[0]
             dirigeant = f"{d.get('prenoms', '')} {d.get('nom', '')}".strip()
 
-    date_pub = record.get("dateparution", datetime.now().strftime("%Y-%m-%d"))
+    forme = ""
+    pm = record.get("personneMorale") or record.get("personnemorale")
+    if isinstance(pm, dict):
+        forme = pm.get("formeJuridique", "") or pm.get("formeJuridiqueCode", "")
 
     return {
-        "siret":             siren + "00001" if siren and len(siren) == 9 else siren,
+        "siret":             (siren + "00001") if siren and len(siren) == 9 else siren or record.get("id", ""),
         "siren":             siren,
-        "nom_entreprise":    denomination,
+        "nom_entreprise":    denomination or f"Entreprise BODACC {record.get('numeroannonce', '')}",
         "dirigeants":        [{"nom_complet": dirigeant}],
         "code_naf":          naf or "9999Z",
-        "libelle_code_naf":  naf_label or "Activité commerciale",
-        "date_immatriculation": date_pub,
+        "libelle_code_naf":  naf_label or record.get("familleavis_lib", "Activité commerciale"),
+        "date_immatriculation": record.get("dateparution", datetime.now().strftime("%Y-%m-%d")),
         "adresse_ligne_1":   rue,
         "ville":             ville,
         "code_postal":       cp,
-        "forme_juridique":   (record.get("personneMorale") or {}).get("formeJuridique", ""),
+        "forme_juridique":   forme,
         "_source":           "BODACC",
     }
 
