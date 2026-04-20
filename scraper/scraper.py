@@ -145,8 +145,92 @@ NAF_LABELS = {
     "7112B": "Ingénierie et études techniques",
 }
 
+def deep_find(obj, key: str) -> str:
+    """Cherche récursivement une clé dans n'importe quel champ imbriqué ou JSON string."""
+    if isinstance(obj, dict):
+        if key in obj and isinstance(obj[key], str) and obj[key]:
+            return obj[key]
+        for v in obj.values():
+            r = deep_find(v, key)
+            if r:
+                return r
+    elif isinstance(obj, str):
+        try:
+            return deep_find(json.loads(obj), key)
+        except Exception:
+            pass
+    elif isinstance(obj, list):
+        for item in obj:
+            r = deep_find(item, key)
+            if r:
+                return r
+    return ""
+
+
 def normalize_bodacc(record: dict, enrichment: dict = {}) -> dict:
-    # Champs plats BODACC (noms réels du dataset opendatasoft)
+    # Recherche profonde dans tous les champs imbriqués
+    denomination = (
+        deep_find(record, "denominationSociale") or
+        deep_find(record, "denomination") or
+        deep_find(record, "raisonSociale") or
+        deep_find(record, "nomCommercial") or ""
+    )
+
+    # Dirigeant
+    gerant = deep_find(record, "nomGerant") or deep_find(record, "gerant") or ""
+    nom_p  = deep_find(record, "nom")
+    prenom_p = deep_find(record, "prenom")
+    if not gerant and (nom_p or prenom_p):
+        gerant = f"{prenom_p} {nom_p}".strip()
+
+    # Adresse
+    ville  = deep_find(record, "ville") or deep_find(record, "commune") or deep_find(record, "localite") or f"Dpt {record.get('numerodepartement', '')}"
+    cp     = deep_find(record, "codePostal") or deep_find(record, "cp") or ""
+    rue    = f"{deep_find(record, 'numeroVoie')} {deep_find(record, 'nomVoie')}".strip()
+
+    # NAF
+    naf       = deep_find(record, "codeAPE") or deep_find(record, "activitePrincipale") or deep_find(record, "activite") or ""
+    naf       = naf.replace(".", "")
+    naf_label = NAF_LABELS.get(naf, deep_find(record, "libelleActivite") or "")
+
+    # Forme juridique
+    forme = deep_find(record, "formeJuridique") or deep_find(record, "libelleFormeJuridique") or ""
+
+    # SIREN
+    siren = deep_find(record, "siren") or deep_find(record, "numeroIdentifiant") or deep_find(record, "numeroIdentification") or ""
+    siren = siren.replace(" ", "")[:9] if siren else ""
+    unique_id = (siren + "00001") if (siren and len(siren) == 9) else record.get("id", str(record.get("numeroannonce", "")))
+
+    # Date
+    date = deep_find(record, "dateImmatriculation") or record.get("dateparution", datetime.now().strftime("%Y-%m-%d"))
+
+    # Enrichissement annuaire si nom encore vide
+    if not denomination and enrichment:
+        denomination = enrichment.get("nom_complet") or enrichment.get("nom_raison_sociale") or ""
+        dirs = enrichment.get("dirigeants", [])
+        if dirs and not gerant:
+            d = dirs[0]
+            gerant = f"{d.get('prenoms','')} {d.get('nom','')}".strip()
+        if not naf:
+            matching = enrichment.get("matching_etablissements", [{}])
+            etab = matching[0] if matching else {}
+            naf = etab.get("activite_principale","").replace(".","")
+            naf_label = NAF_LABELS.get(naf, "")
+
+    return {
+        "siret":             unique_id,
+        "siren":             siren,
+        "nom_entreprise":    denomination or f"Société BODACC #{record.get('numeroannonce','')}",
+        "dirigeants":        [{"nom_complet": gerant or "Non communiqué"}],
+        "code_naf":          naf or "9999Z",
+        "libelle_code_naf":  naf_label or "Immatriculation",
+        "date_immatriculation": date,
+        "adresse_ligne_1":   rue,
+        "ville":             ville,
+        "code_postal":       cp,
+        "forme_juridique":   forme,
+        "_source":           "BODACC",
+    }
     denomination = (
         record.get("denomination") or
         record.get("denominationSociale") or
