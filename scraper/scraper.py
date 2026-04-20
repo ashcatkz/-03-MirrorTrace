@@ -86,13 +86,13 @@ def is_immatriculation(record: dict) -> bool:
 def fetch_all_bodacc(date_depuis: str) -> list[dict]:
     all_records = []
     offset = 0
-    while True:
+    MAX_OFFSET = 500  # max 10 000 enregistrements par cycle
+    while offset <= MAX_OFFSET:
         try:
             data = fetch_bodacc(date_depuis, offset)
             records = data.get("results", [])
             if not records:
                 break
-            # Filtrer côté Python les immatriculations
             immatriculations = [r for r in records if is_immatriculation(r)]
             all_records.extend(immatriculations)
             log.info(f"[BODACC] offset={offset} — {len(records)} annonces, {len(immatriculations)} immatriculations")
