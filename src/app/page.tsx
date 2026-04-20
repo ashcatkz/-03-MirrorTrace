@@ -7,6 +7,7 @@ import { ProspectsTable } from "@/components/ProspectsTable";
 import { ScraperControl } from "@/components/ScraperControl";
 import { Badge } from "@/components/ui/badge";
 import { useProspectsStore } from "@/store/prospects";
+import { useAutoRefresh } from "@/hooks/useAutoRefresh";
 
 function Header() {
   const { isScraping, prospects } = useProspectsStore();
@@ -80,6 +81,7 @@ function SectionHeader({
 }
 
 export default function Dashboard() {
+  useAutoRefresh(30000);
   return (
     <div className="min-h-screen bg-background">
       <Header />
