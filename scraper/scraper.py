@@ -294,12 +294,8 @@ def run_cycle() -> None:
     state = load_state()
     seen  = set(state.get("seen_sirets", []))
 
-    last_run = state.get("last_run")
-    date_depuis = (
-        datetime.fromisoformat(last_run).strftime("%Y-%m-%d")
-        if last_run
-        else (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")  # 7 jours au premier lancement
-    )
+    # Toujours chercher sur les 7 derniers jours minimum
+    date_depuis = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
     log.info(f"Immatriculations depuis : {date_depuis}")
 
     records = fetch_all_bodacc(date_depuis)
