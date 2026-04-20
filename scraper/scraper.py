@@ -86,7 +86,8 @@ def is_immatriculation(record: dict) -> bool:
 def fetch_all_bodacc(date_depuis: str) -> list[dict]:
     all_records = []
     offset = 0
-    MAX_OFFSET = 500  # max 10 000 enregistrements par cycle
+    MAX_OFFSET = 500
+    logged_example = False
     while offset <= MAX_OFFSET:
         try:
             data = fetch_bodacc(date_depuis, offset)
@@ -94,8 +95,12 @@ def fetch_all_bodacc(date_depuis: str) -> list[dict]:
             if not records:
                 break
             immatriculations = [r for r in records if is_immatriculation(r)]
+            # Log le premier exemple d'immatriculation trouvé
+            if immatriculations and not logged_example:
+                log.info(f"[BODACC] Exemple immatriculation complète:\n{json.dumps(immatriculations[0], ensure_ascii=False, indent=2)[:1000]}")
+                logged_example = True
             all_records.extend(immatriculations)
-            log.info(f"[BODACC] offset={offset} — {len(records)} annonces, {len(immatriculations)} immatriculations")
+            log.info(f"[BODACC] offset={offset} — {len(immatriculations)} immatriculations")
             if len(records) < 50:
                 break
             offset += 50
@@ -140,6 +145,72 @@ NAF_LABELS = {
     "7112B": "Ingénierie et études techniques",
 }
 
+def normalize_bodacc(record: dict, enrichment: dict = {}) -> dict:
+    # Champs plats BODACC (noms réels du dataset opendatasoft)
+    denomination = (
+        record.get("denomination") or
+        record.get("denominationSociale") or
+        record.get("raisonSociale") or ""
+    )
+    # Dirigeant / gérant
+    gerant = record.get("gerant") or record.get("dirigeant") or ""
+    if isinstance(gerant, dict):
+        gerant = f"{gerant.get('prenom','')} {gerant.get('nom','')}".strip()
+
+    # Adresse siège
+    adresse_siege = record.get("adresseSiege") or record.get("adressePrincipalEtablissement") or {}
+    if isinstance(adresse_siege, str):
+        try:
+            adresse_siege = json.loads(adresse_siege)
+        except Exception:
+            adresse_siege = {}
+    ville   = adresse_siege.get("ville") or adresse_siege.get("commune") or record.get("ville") or f"Dpt {record.get('numerodepartement','')}"
+    cp      = adresse_siege.get("codePostal") or adresse_siege.get("cp") or ""
+    rue     = adresse_siege.get("numeroVoie","") + " " + adresse_siege.get("nomVoie","")
+
+    # NAF / activité
+    naf       = (record.get("activite") or "").replace(".", "")
+    naf_label = NAF_LABELS.get(naf, record.get("libelleActivite") or record.get("familleavis_lib") or "")
+
+    # SIRET / SIREN
+    siren = record.get("numeroIdentifiant") or record.get("siren") or ""
+    if isinstance(siren, str):
+        siren = siren.replace(" ", "")[:9]
+    siret = siren + "00001" if siren and len(siren) == 9 else record.get("id", "")
+
+    # Forme juridique
+    forme = record.get("formeJuridique") or ""
+
+    # Date
+    date = record.get("dateImmatriculation") or record.get("dateparution") or datetime.now().strftime("%Y-%m-%d")
+
+    # Enrichissement annuaire si dénomination vide
+    if not denomination and enrichment:
+        matching = enrichment.get("matching_etablissements", [{}])
+        etab = matching[0] if matching else {}
+        denomination = enrichment.get("nom_complet") or enrichment.get("nom_raison_sociale") or ""
+        naf = naf or etab.get("activite_principale","").replace(".","")
+        naf_label = naf_label or NAF_LABELS.get(naf,"")
+        dirs = enrichment.get("dirigeants",[])
+        if dirs and not gerant:
+            d = dirs[0]
+            gerant = f"{d.get('prenoms','')} {d.get('nom','')}".strip()
+
+    return {
+        "siret":             siret,
+        "siren":             siren,
+        "nom_entreprise":    denomination or f"Société BODACC #{record.get('numeroannonce','')}",
+        "dirigeants":        [{"nom_complet": gerant or "Non communiqué"}],
+        "code_naf":          naf or "9999Z",
+        "libelle_code_naf":  naf_label or "Activité commerciale",
+        "date_immatriculation": date,
+        "adresse_ligne_1":   rue.strip(),
+        "ville":             ville,
+        "code_postal":       cp,
+        "forme_juridique":   forme,
+        "_source":           "BODACC",
+    }
+
 def _get_nested(record: dict, *keys: str) -> str:
     """Cherche une valeur dans des champs imbriqués ou plats (casse flexible)."""
     for key in keys:
@@ -153,76 +224,6 @@ def _get_nested(record: dict, *keys: str) -> str:
                 if sv:
                     return sv
     return ""
-
-def normalize_bodacc(record: dict, enrichment: dict = {}) -> dict:
-    # SIREN — chercher dans plusieurs champs possibles
-    siren = ""
-    for field in ["numeroImmatriculation", "registre", "siren", "numerosiren"]:
-        v = record.get(field)
-        if isinstance(v, dict):
-            siren = v.get("numeroIdentification", "") or v.get("siren", "")
-        elif isinstance(v, str) and v.isdigit() and len(v) in (9, 14):
-            siren = v[:9]
-        if siren:
-            break
-
-    # Nom de l'entreprise
-    denomination = ""
-    for field in ["personneMorale", "personnemorale"]:
-        pm = record.get(field)
-        if isinstance(pm, dict):
-            denomination = pm.get("denominationSociale", "") or pm.get("denomination", "")
-            break
-    if not denomination:
-        pp = record.get("personnePhysique") or record.get("personnephysique") or {}
-        if isinstance(pp, dict):
-            denomination = f"{pp.get('prenom', '')} {pp.get('nom', '')}".strip()
-
-    # Adresse
-    adresse = record.get("adresse") or {}
-    if isinstance(adresse, dict):
-        ville = adresse.get("ville") or adresse.get("commune") or adresse.get("localite", "")
-        cp = adresse.get("codePostal", "")
-        rue = f"{adresse.get('numeroVoie', '')} {adresse.get('typeVoie', '')} {adresse.get('nomVoie', '')}".strip()
-    else:
-        ville, cp, rue = "", "", ""
-
-    # Département comme fallback de ville
-    if not ville:
-        dept = record.get("numerodepartement", "")
-        ville = f"Département {dept}" if dept else ""
-
-    # Enrichissement annuaire-entreprises
-    naf, naf_label, dirigeant = "", "", "Dirigeant non communiqué"
-    if enrichment:
-        matching = enrichment.get("matching_etablissements", [{}])
-        etab = matching[0] if matching else {}
-        naf = etab.get("activite_principale", "").replace(".", "")
-        naf_label = NAF_LABELS.get(naf, etab.get("libelle_activite_principale", ""))
-        dirs = enrichment.get("dirigeants", [])
-        if dirs:
-            d = dirs[0]
-            dirigeant = f"{d.get('prenoms', '')} {d.get('nom', '')}".strip()
-
-    forme = ""
-    pm = record.get("personneMorale") or record.get("personnemorale")
-    if isinstance(pm, dict):
-        forme = pm.get("formeJuridique", "") or pm.get("formeJuridiqueCode", "")
-
-    return {
-        "siret":             (siren + "00001") if siren and len(siren) == 9 else siren or record.get("id", ""),
-        "siren":             siren,
-        "nom_entreprise":    denomination or f"Entreprise BODACC {record.get('numeroannonce', '')}",
-        "dirigeants":        [{"nom_complet": dirigeant}],
-        "code_naf":          naf or "9999Z",
-        "libelle_code_naf":  naf_label or record.get("familleavis_lib", "Activité commerciale"),
-        "date_immatriculation": record.get("dateparution", datetime.now().strftime("%Y-%m-%d")),
-        "adresse_ligne_1":   rue,
-        "ville":             ville,
-        "code_postal":       cp,
-        "forme_juridique":   forme,
-        "_source":           "BODACC",
-    }
 
 # --------------------------------------------------------------------------- #
 # Analyse IA                                                                   #
