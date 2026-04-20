@@ -45,7 +45,7 @@ export const useProspectsStore = create<ProspectsStore>((set, get) => ({
     set((state) => {
       const existingSirets = new Set(state.prospects.map((p) => p.siret));
       const fresh = newProspects.filter(
-        (p) => p.siret && p.companyName && !existingSirets.has(p.siret)
+        (p) => p.companyName && !existingSirets.has(p.siret)
       );
       if (fresh.length === 0) return state;
       return { prospects: [...fresh, ...state.prospects] };

@@ -172,11 +172,26 @@ def normalize_bodacc(record: dict, enrichment: dict = {}) -> dict:
     naf       = (record.get("activite") or "").replace(".", "")
     naf_label = NAF_LABELS.get(naf, record.get("libelleActivite") or record.get("familleavis_lib") or "")
 
-    # SIRET / SIREN
-    siren = record.get("numeroIdentifiant") or record.get("siren") or ""
-    if isinstance(siren, str):
-        siren = siren.replace(" ", "")[:9]
-    siret = siren + "00001" if siren and len(siren) == 9 else record.get("id", "")
+    # SIRET / SIREN — essayer tous les champs possibles
+    siren = ""
+    for field in ["numeroIdentifiant", "siren", "numeroImmatriculation", "registre"]:
+        v = record.get(field)
+        if isinstance(v, str):
+            clean = v.replace(" ", "").replace(".", "")
+            if clean.isdigit() and len(clean) >= 9:
+                siren = clean[:9]
+                break
+        elif isinstance(v, dict):
+            for sub in ["numeroIdentification", "siren", "numeroIdentifiant"]:
+                sv = str(v.get(sub, "")).replace(" ", "")
+                if sv.isdigit() and len(sv) >= 9:
+                    siren = sv[:9]
+                    break
+            if siren:
+                break
+    # Fallback : utiliser l'ID BODACC comme identifiant unique
+    unique_id = record.get("id", str(record.get("numeroannonce", "")))
+    siret = (siren + "00001") if (siren and len(siren) == 9) else unique_id
 
     # Forme juridique
     forme = record.get("formeJuridique") or ""
