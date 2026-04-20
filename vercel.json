@@ -1,0 +1,11 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "env": {
+    "OPENAI_API_KEY": "@openai_api_key",
+    "PAPPERS_API_KEY": "@pappers_api_key",
+    "SIRENE_API_TOKEN": "@sirene_api_token"
+  }
+}
